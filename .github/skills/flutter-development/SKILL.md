@@ -8,8 +8,8 @@ Use this skill when working on Flutter app tasks.
 ## Goals
 - Make the smallest possible change to solve the issue.
 - Keep behavior stable unless the task explicitly requires behavioral changes.
-- Always opt for an online-first approach.
-- Skip tests for this repository workflow.
+- Always opt for an online-first approach (prefer network-backed data and flows over offline-first behavior by default).
+- Skip tests for this repository workflow unless explicitly requested by the user.
 
 ## Workflow
 1. Inspect existing project structure (`pubspec.yaml`, `lib/`, `test/`, platform folders) before editing.
