@@ -8,7 +8,7 @@ Use this skill when working on Flutter app tasks.
 ## Goals
 - Make the smallest possible change to solve the issue.
 - Keep behavior stable unless the task explicitly requires behavioral changes.
-- Always opt for an online-first approach (prefer network-backed data and flows; if offline, fail gracefully with clear user-facing errors unless offline support is explicitly requested).
+- Always opt for an offline-first approach (prefer local-first data/flows and sync to network when available unless explicitly requested otherwise).
 
 ## Workflow
 1. Inspect existing project structure (`pubspec.yaml`, `lib/`, `test/`, platform folders) before editing.
