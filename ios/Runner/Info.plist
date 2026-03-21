@@ -45,5 +45,28 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<!-- Camera usage -->
+	<key>NSCameraUsageDescription</key>
+	<string>COC-CHECKIN needs camera access for QR ticket scanning and face recognition check-in.</string>
+	<!-- Bluetooth (external fingerprint reader) -->
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>COC-CHECKIN uses Bluetooth to connect to the external fingerprint reader device.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>COC-CHECKIN uses Bluetooth to connect to the external fingerprint reader device.</string>
+	<!-- Face ID / biometric -->
+	<key>NSFaceIDUsageDescription</key>
+	<string>COC-CHECKIN uses Face ID for operator authentication.</string>
+	<!-- Background modes for WorkManager/background fetch -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+		<string>processing</string>
+	</array>
+	<!-- Background task identifiers for WorkManager -->
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>coc.pullEnrollees</string>
+		<string>coc.pushCheckins</string>
+	</array>
 </dict>
 </plist>
