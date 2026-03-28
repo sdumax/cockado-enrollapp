@@ -10,6 +10,7 @@ import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:drift/drift.dart' show Value;
+import 'package:tflite_flutter/tflite_flutter.dart';
 
 import 'package:cockado_enrollapp/core/theme/app_colors.dart';
 import 'package:cockado_enrollapp/core/db/app_database.dart';
@@ -38,6 +39,8 @@ class _MatchResult {
   final double score;
 }
 
+enum _FaceHint { none, noFace, moveCloser, moveBack, centerFace, lookStraight }
+
 // ---------------------------------------------------------------------------
 // Screen
 // ---------------------------------------------------------------------------
@@ -59,6 +62,9 @@ class _FaceCaptureScreenState extends ConsumerState<FaceCaptureScreen> {
   // Face detector
   late final FaceDetector _faceDetector;
 
+  // TFLite interpreter for MobileFaceNet
+  Interpreter? _interpreter;
+
   // Throttle
   static const _frameCooldown = Duration(milliseconds: 200);
   DateTime _lastFrameAt = DateTime.fromMillisecondsSinceEpoch(0);
@@ -66,6 +72,7 @@ class _FaceCaptureScreenState extends ConsumerState<FaceCaptureScreen> {
 
   // UI state
   _FaceState _faceState = _FaceState.idle;
+  _FaceHint _hint = _FaceHint.noFace;
   _MatchResult? _matched;
   bool _showToast = false;
   String? _toastTitle;
@@ -94,6 +101,7 @@ class _FaceCaptureScreenState extends ConsumerState<FaceCaptureScreen> {
         performanceMode: FaceDetectorMode.fast,
       ),
     );
+    _loadModel();
     // Only init camera if face mode is already active.
     // When the app starts on ticket mode, IndexedStack mounts all screens
     // simultaneously — calling _initCamera() here would open a CameraController
@@ -113,7 +121,18 @@ class _FaceCaptureScreenState extends ConsumerState<FaceCaptureScreen> {
     _stopStreaming();
     _cameraController?.dispose();
     _faceDetector.close();
+    _interpreter?.close();
     super.dispose();
+  }
+
+  Future<void> _loadModel() async {
+    try {
+      _interpreter = await Interpreter.fromAsset(
+        'assets/models/mobilefacenet.tflite',
+      );
+    } catch (_) {
+      // Model failed to load — matching will return null until resolved.
+    }
   }
 
   // ── Streaming control ─────────────────────────────────────────────────────
@@ -125,7 +144,9 @@ class _FaceCaptureScreenState extends ConsumerState<FaceCaptureScreen> {
   }
 
   void _startStreaming() {
-    if (_isStreaming || _cameraController == null || !_cameraInitialised) return;
+    if (_isStreaming || _cameraController == null || !_cameraInitialised) {
+      return;
+    }
     _cameraController!.startImageStream(_onCameraFrame);
     _isStreaming = true;
   }
@@ -162,9 +183,13 @@ class _FaceCaptureScreenState extends ConsumerState<FaceCaptureScreen> {
         return;
       }
 
-      // Prefer front camera for face enrolment / recognition.
+      // Use the camera facing set in Settings (default: rear).
+      final facing = ref.read(scanCameraFacingProvider);
+      final preferredDirection = facing == 'FRONT'
+          ? CameraLensDirection.front
+          : CameraLensDirection.back;
       final camera = cameras.firstWhere(
-        (c) => c.lensDirection == CameraLensDirection.front,
+        (c) => c.lensDirection == preferredDirection,
         orElse: () => cameras.first,
       );
 
@@ -227,32 +252,37 @@ class _FaceCaptureScreenState extends ConsumerState<FaceCaptureScreen> {
 
     if (faces.isEmpty) {
       if (_faceState == _FaceState.scanning) {
-        // Check whether the 3-second timeout has elapsed.
         if (_scanStartedAt != null &&
             DateTime.now().difference(_scanStartedAt!) >=
                 _scanTimeoutDuration) {
-          // Stay in scanning — operator can use tally fallback.
-          // Reset the timer so we don't spam state changes.
           _scanStartedAt = DateTime.now();
         }
       } else {
-        setState(() => _faceState = _FaceState.idle);
+        setState(() {
+          _faceState = _FaceState.idle;
+          _hint = _FaceHint.noFace;
+        });
         ref.read(captureActiveProvider.notifier).state = false;
       }
       return;
     }
 
-    // Face detected — move to scanning if not already past that.
+    // Face detected — compute positioning hint.
+    final hint = _computeHint(faces.first, image);
+
+    // Move to scanning if not already past that.
     if (_faceState == _FaceState.idle) {
       setState(() {
         _faceState = _FaceState.scanning;
         _scanStartedAt = DateTime.now();
+        _hint = hint;
       });
       ref.read(captureActiveProvider.notifier).state = true;
+    } else {
+      if (mounted) setState(() => _hint = hint);
     }
 
-    // Attempt match (stub: always returns null until Phase 9).
-    final match = await _matchFace();
+    final match = await _matchFace(image, faces.first);
     if (!mounted) return;
 
     if (match != null) {
@@ -301,17 +331,138 @@ class _FaceCaptureScreenState extends ConsumerState<FaceCaptureScreen> {
     }
   }
 
-  // ── Face matching stub ────────────────────────────────────────────────────
+  // ── Face guidance hints ───────────────────────────────────────────────────
 
-  /// Generates a 128-float placeholder embedding.  Real TFLite inference
-  /// is wired up in Phase 9.
-  List<double> _generatePlaceholderEmbedding() {
-    final rand = math.Random();
-    final vec = List<double>.generate(128, (_) => rand.nextDouble() * 2 - 1);
-    // L2-normalise
-    final norm =
-        math.sqrt(vec.fold<double>(0.0, (sum, v) => sum + v * v));
-    return vec.map((v) => v / (norm == 0 ? 1 : norm)).toList();
+  _FaceHint _computeHint(Face face, CameraImage image) {
+    final imgW = image.width.toDouble();
+    final imgH = image.height.toDouble();
+    final bb = face.boundingBox;
+
+    // Size: compare average face dimension to shorter image side.
+    final faceSize = (bb.width + bb.height) / 2;
+    final shortSide = imgW < imgH ? imgW : imgH;
+    final ratio = faceSize / shortSide;
+    if (ratio < 0.20) return _FaceHint.moveCloser;
+    if (ratio > 0.75) return _FaceHint.moveBack;
+
+    // Centering: face centre should be within 25% of image centre.
+    final cx = bb.center.dx / imgW;
+    final cy = bb.center.dy / imgH;
+    if ((cx - 0.5).abs() > 0.25 || (cy - 0.5).abs() > 0.25) {
+      return _FaceHint.centerFace;
+    }
+
+    // Head angle: yaw and pitch within ±25°.
+    final yaw = face.headEulerAngleY ?? 0.0;
+    final pitch = face.headEulerAngleX ?? 0.0;
+    if (yaw.abs() > 25 || pitch.abs() > 25) return _FaceHint.lookStraight;
+
+    return _FaceHint.none;
+  }
+
+  // ── Face matching (MobileFaceNet TFLite) ─────────────────────────────────
+
+  /// Runs MobileFaceNet on the detected face crop and compares against all
+  /// stored embeddings. Returns the best match above the 0.75 threshold.
+  Future<_MatchResult?> _matchFace(CameraImage image, Face face) async {
+    if (_interpreter == null) return null;
+
+    final input = _preprocessFace(image, face.boundingBox);
+    if (input == null) return null;
+
+    // Run inference: input [1,112,112,3], output [1,128]
+    final outputBuffer = List.filled(128, 0.0);
+    final output = [outputBuffer];
+    try {
+      _interpreter!.run(
+        [input.reshape([112, 112, 3])],
+        output,
+      );
+    } catch (_) {
+      return null;
+    }
+
+    final embedding = _l2Normalize(List<double>.from(outputBuffer));
+    debugPrint('[FaceCapture] embedding (128-d): $embedding');
+
+    // DEBUG: stop streaming immediately after first embed log.
+    _stopStreaming();
+    return null;
+
+    // ignore: dead_code
+    final db = ref.read(databaseProvider);
+    final candidates = await db.enrolleesDao.getWithFaceEmbedding();
+    if (candidates.isEmpty) return null;
+
+    _MatchResult? best;
+    double bestScore = 0.75; // minimum cosine similarity threshold
+
+    for (final enrollee in candidates) {
+      final raw = enrollee.faceEmbedding;
+      if (raw == null) continue;
+      final stored = _bytesToFloats(raw);
+      if (stored.isEmpty) continue;
+      final score = _cosineSimilarity(embedding, stored);
+      if (score > bestScore) {
+        bestScore = score;
+        best = _MatchResult(enrollee: enrollee, score: score);
+      }
+    }
+
+    return best;
+  }
+
+  /// Crops the face bounding box from a NV21 CameraImage, converts YUV→RGB,
+  /// resizes to 112×112, and normalises pixels to [-1, 1].
+  Float32List? _preprocessFace(CameraImage image, Rect boundingBox) {
+    const targetSize = 112;
+    final imgW = image.width;
+    final imgH = image.height;
+
+    final left = boundingBox.left.clamp(0.0, imgW - 1.0).toInt();
+    final top = boundingBox.top.clamp(0.0, imgH - 1.0).toInt();
+    final right = boundingBox.right.clamp(1.0, imgW.toDouble()).toInt();
+    final bottom = boundingBox.bottom.clamp(1.0, imgH.toDouble()).toInt();
+    final cropW = (right - left).clamp(1, imgW);
+    final cropH = (bottom - top).clamp(1, imgH);
+
+    if (image.planes.length < 2) return null;
+    final yPlane = image.planes[0].bytes;
+    final uvPlane = image.planes[1].bytes;
+    final uvRowStride = image.planes[1].bytesPerRow;
+
+    final result = Float32List(targetSize * targetSize * 3);
+
+    for (int ty = 0; ty < targetSize; ty++) {
+      for (int tx = 0; tx < targetSize; tx++) {
+        final sx = left + (tx * cropW / targetSize).toInt();
+        final sy = top + (ty * cropH / targetSize).toInt();
+
+        final yVal = yPlane[sy * imgW + sx] & 0xFF;
+        final uvIdx = (sy ~/ 2) * uvRowStride + (sx ~/ 2) * 2;
+        final vVal = uvIdx < uvPlane.length ? uvPlane[uvIdx] & 0xFF : 128;
+        final uVal =
+            uvIdx + 1 < uvPlane.length ? uvPlane[uvIdx + 1] & 0xFF : 128;
+
+        final r = (yVal + 1.402 * (vVal - 128)).clamp(0.0, 255.0);
+        final g = (yVal - 0.344136 * (uVal - 128) - 0.714136 * (vVal - 128))
+            .clamp(0.0, 255.0);
+        final b = (yVal + 1.772 * (uVal - 128)).clamp(0.0, 255.0);
+
+        final idx = (ty * targetSize + tx) * 3;
+        result[idx] = (r / 127.5) - 1.0;
+        result[idx + 1] = (g / 127.5) - 1.0;
+        result[idx + 2] = (b / 127.5) - 1.0;
+      }
+    }
+
+    return result;
+  }
+
+  List<double> _l2Normalize(List<double> vec) {
+    final norm = math.sqrt(vec.fold<double>(0.0, (s, v) => s + v * v));
+    if (norm == 0) return vec;
+    return vec.map((v) => v / norm).toList();
   }
 
   double _cosineSimilarity(List<double> a, List<double> b) {
@@ -326,40 +477,9 @@ class _FaceCaptureScreenState extends ConsumerState<FaceCaptureScreen> {
     return denom == 0 ? 0.0 : dot / denom;
   }
 
-  /// Returns a match if cosine similarity > 0.75, otherwise null.
-  /// Currently always returns null (placeholder embedding vs stored
-  /// embeddings will never exceed threshold until Phase 9 wires real
-  /// TFLite inference).
-  Future<_MatchResult?> _matchFace() async {
-    final db = ref.read(databaseProvider);
-    final candidates = await db.enrolleesDao.getWithFaceEmbedding();
-
-    if (candidates.isEmpty) return null;
-
-    final queryEmbedding = _generatePlaceholderEmbedding();
-    _MatchResult? best;
-    double bestScore = 0.75; // minimum threshold
-
-    for (final enrollee in candidates) {
-      final raw = enrollee.faceEmbedding;
-      if (raw == null) continue;
-      final stored = _bytesToFloats(raw);
-      if (stored.isEmpty) continue;
-      final score = _cosineSimilarity(queryEmbedding, stored);
-      if (score > bestScore) {
-        bestScore = score;
-        best = _MatchResult(enrollee: enrollee, score: score);
-      }
-    }
-
-    return best;
-  }
-
   List<double> _bytesToFloats(Uint8List bytes) {
     if (bytes.length % 4 != 0) return [];
-    final buffer = bytes.buffer;
-    final floats = buffer.asFloat32List();
-    return floats.map((f) => f.toDouble()).toList();
+    return bytes.buffer.asFloat32List().map((f) => f.toDouble()).toList();
   }
 
   // ── Success flow ──────────────────────────────────────────────────────────
@@ -394,12 +514,11 @@ class _FaceCaptureScreenState extends ConsumerState<FaceCaptureScreen> {
   Future<void> _writeCheckin(Enrollee enrollee) async {
     if (_activeEventId == null) return;
     final db = ref.read(databaseProvider);
-    final already = await db.checkinsDao
-        .hasCheckinForEvent(enrollee.id, _activeEventId!);
+    final already =
+        await db.checkinsDao.hasCheckinForEvent(enrollee.id, _activeEventId!);
     if (already) return;
 
-    final deviceId =
-        await ref.read(deviceIdServiceProvider).getDeviceId();
+    final deviceId = await ref.read(deviceIdServiceProvider).getDeviceId();
 
     await db.checkinsDao.insertCheckin(
       CheckinsCompanion(
@@ -435,10 +554,81 @@ class _FaceCaptureScreenState extends ConsumerState<FaceCaptureScreen> {
           ),
       };
 
+  Widget _buildHintBanner(_FaceHint hint) {
+    final (IconData icon, String text, Color color) = switch (hint) {
+      _FaceHint.noFace => (
+          Icons.face_retouching_off_outlined,
+          'FACE NOT IN FRAME',
+          AppColors.textMuted,
+        ),
+      _FaceHint.moveCloser => (
+          Icons.zoom_in,
+          'MOVE CLOSER',
+          AppColors.blueLight,
+        ),
+      _FaceHint.moveBack => (
+          Icons.zoom_out,
+          'MOVE BACK',
+          AppColors.blueLight,
+        ),
+      _FaceHint.centerFace => (
+          Icons.center_focus_strong_outlined,
+          'CENTER YOUR FACE',
+          AppColors.blueLight,
+        ),
+      _FaceHint.lookStraight => (
+          Icons.face_outlined,
+          'LOOK STRAIGHT AHEAD',
+          AppColors.blueLight,
+        ),
+      _FaceHint.none => (Icons.check, '', AppColors.success),
+    };
+
+    return Center(
+      key: ValueKey(hint),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: AppColors.darkBackground.withValues(alpha: 0.85),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: color.withValues(alpha: 0.45)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 14, color: color),
+            const SizedBox(width: 8),
+            Text(
+              text,
+              style: TextStyle(
+                fontFamily: 'Inter',
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 1.2,
+                color: color,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<String>(scanCameraFacingProvider, (prev, next) {
+      if (prev != next && ref.read(activeScanModeProvider) == ScanMode.face) {
+        // Re-init with the new camera direction.
+        _releaseCamera().then((_) {
+          if (mounted && ref.read(activeScanModeProvider) == ScanMode.face) {
+            _initCamera();
+          }
+        });
+      }
+    });
+
     ref.listen<ScanMode>(activeScanModeProvider, (prev, next) {
       if (next != ScanMode.face) {
         // Fully release the camera so the ticket scanner can open it.
@@ -502,7 +692,8 @@ class _FaceCaptureScreenState extends ConsumerState<FaceCaptureScreen> {
             onTap: () async {
               _stopStreaming();
               await context.push('/settings');
-              if (mounted && ref.read(activeScanModeProvider) == ScanMode.face) {
+              if (mounted &&
+                  ref.read(activeScanModeProvider) == ScanMode.face) {
                 _startStreaming();
               }
             },
@@ -583,6 +774,20 @@ class _FaceCaptureScreenState extends ConsumerState<FaceCaptureScreen> {
               successName: _matched?.enrollee.fullName,
             ),
           ),
+
+          // Guidance hint banner
+          if (_faceState != _FaceState.success)
+            Positioned(
+              bottom: 16,
+              left: 24,
+              right: 24,
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 250),
+                child: _hint != _FaceHint.none
+                    ? _buildHintBanner(_hint)
+                    : const SizedBox.shrink(key: ValueKey('none')),
+              ),
+            ),
         ],
       ),
     );
@@ -628,7 +833,6 @@ class _FaceCaptureScreenState extends ConsumerState<FaceCaptureScreen> {
       ),
     );
   }
-
 
   Widget _buildEnrolmentButton() {
     return SizedBox(

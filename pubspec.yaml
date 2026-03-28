@@ -35,7 +35,7 @@ dependencies:
   google_mlkit_face_detection: ^0.11.0
 
   # TFLite for face recognition (MobileFaceNet)
-  tflite_flutter: ^0.10.4
+  tflite_flutter: ^0.12.1
 
   # HTTP
   dio: ^5.7.0

@@ -93,13 +93,13 @@ class _TallyScreenState extends ConsumerState<TallyScreen> {
       };
 
   Color get _headlineColor => switch (_state) {
-        _TallyState.idle => AppColors.textSecondary,
+        _TallyState.idle => AppColors.textPrimary,
         _TallyState.success => AppColors.success,
         _TallyState.error => AppColors.error,
       };
 
   Color get _subtitleColor => switch (_state) {
-        _TallyState.idle => AppColors.textMuted,
+        _TallyState.idle => const Color(0xFF8B9DC3),
         _TallyState.success => const Color(0xFF86EFAC),
         _TallyState.error => const Color(0xFFFCA5A5),
       };
@@ -135,16 +135,16 @@ class _TallyScreenState extends ConsumerState<TallyScreen> {
               },
               behavior: HitTestBehavior.opaque,
               child: Container(
-                width: 32.0,
-                height: 32.0,
+                width: 40.0,
+                height: 40.0,
                 decoration: const BoxDecoration(
-                  color: AppColors.darkCard,
+                  color: Color(0xFF152235),
                   shape: BoxShape.circle,
                 ),
                 child: const Icon(
                   Icons.settings_outlined,
                   color: AppColors.textSecondary,
-                  size: 18.0,
+                  size: 20.0,
                 ),
               ),
             ),
@@ -272,6 +272,9 @@ class _TallyScreenState extends ConsumerState<TallyScreen> {
             duration: const Duration(milliseconds: 200),
             height: 80.0,
             margin: const EdgeInsets.symmetric(horizontal: 0),
+            padding: _state != _TallyState.idle
+                ? const EdgeInsets.symmetric(vertical: 12.0, horizontal: 16.0)
+                : EdgeInsets.zero,
             decoration: BoxDecoration(
               color: _statusBg,
               borderRadius: _state != _TallyState.idle
@@ -285,18 +288,18 @@ class _TallyScreenState extends ConsumerState<TallyScreen> {
                   _headline,
                   style: TextStyle(
                     fontFamily: 'Inter',
-                    fontSize: 15.0,
+                    fontSize: 18.0,
                     fontWeight: FontWeight.w700,
-                    letterSpacing: 1.6,
+                    letterSpacing: 2.0,
                     color: _headlineColor,
                   ),
                 ),
-                const SizedBox(height: 6.0),
+                const SizedBox(height: 8.0),
                 Text(
                   _subtitle,
                   style: TextStyle(
                     fontFamily: 'Inter',
-                    fontSize: 12.0,
+                    fontSize: 13.0,
                     fontWeight: FontWeight.w400,
                     letterSpacing: 0.3,
                     color: _subtitleColor,
@@ -326,23 +329,25 @@ class _TallyScreenState extends ConsumerState<TallyScreen> {
                   horizontal: 20.0, vertical: 16.0),
               child: SizedBox(
                 width: double.infinity,
-                child: ElevatedButton(
+                child: ElevatedButton.icon(
                   onPressed: () => context.push('/enrolment'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.blue,
                     foregroundColor: AppColors.textPrimary,
                     elevation: 0,
+                    minimumSize: const Size.fromHeight(56.0),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10.0),
+                      borderRadius: BorderRadius.circular(14.0),
                     ),
                   ),
-                  child: const Text(
+                  icon: const Icon(Icons.person_add_outlined, size: 20.0),
+                  label: const Text(
                     'NEW ENROLMENT',
                     style: TextStyle(
                       fontFamily: 'Inter',
-                      fontSize: 13.0,
+                      fontSize: 14.0,
                       fontWeight: FontWeight.w700,
-                      letterSpacing: 1.4,
+                      letterSpacing: 1.0,
                     ),
                   ),
                 ),

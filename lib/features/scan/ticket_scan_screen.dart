@@ -81,8 +81,11 @@ class _TicketScanScreenState extends ConsumerState<TicketScanScreen> {
 
   Future<void> _recreateScannerController(String facing) async {
     final wasStreaming = ref.read(activeScanModeProvider) == ScanMode.ticket;
-    await _scannerController.dispose();
+    // Swap to new controller BEFORE awaiting the old dispose so that any
+    // pending _streamStartTimer always sees a live (non-disposed) controller.
+    final oldController = _scannerController;
     _scannerController = _buildController(facing);
+    await oldController.dispose();
     if (mounted) {
       setState(() {});
       if (wasStreaming) _startStreaming();
@@ -240,7 +243,8 @@ class _TicketScanScreenState extends ConsumerState<TicketScanScreen> {
               onTap: () async {
                 _stopStreaming();
                 await context.push('/settings');
-                if (mounted && ref.read(activeScanModeProvider) == ScanMode.ticket) {
+                if (mounted &&
+                    ref.read(activeScanModeProvider) == ScanMode.ticket) {
                   _startStreaming();
                 }
               },
@@ -348,7 +352,8 @@ class _TicketScanScreenState extends ConsumerState<TicketScanScreen> {
           SizedBox(
             height: 84.0,
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 14.0),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16.0, vertical: 14.0),
               child: SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(

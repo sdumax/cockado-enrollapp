@@ -8,18 +8,21 @@ import '../../features/init/initialisation_screen.dart';
 import '../../features/auth/login_screen.dart';
 import '../../features/scan/scan_screen.dart';
 import '../../features/enrolment/enrolment_screen.dart';
+import '../../features/enrolment/face_enrolment_screen.dart';
 import '../../features/settings/settings_screen.dart';
 import '../../features/standby/standby_screen.dart';
 import '../../core/services/auth_service.dart';
 
 abstract class AppRoutes {
-  static const splash    = '/';
-  static const init      = '/init';
-  static const login     = '/login';
-  static const scan      = '/scan';
-  static const enrolment = '/enrolment';
-  static const settings  = '/settings';
-  static const standby   = '/standby';
+  static const splash               = '/';
+  static const init                 = '/init';
+  static const login                = '/login';
+  static const scan                 = '/scan';
+  static const enrolment            = '/enrolment';
+  static const enrolmentFace        = '/enrolment/face';
+  static const enrolmentFingerprint = '/enrolment/fingerprint';
+  static const settings             = '/settings';
+  static const standby              = '/standby';
 }
 
 final routerProvider = Provider<GoRouter>((ref) {
@@ -54,6 +57,21 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: AppRoutes.enrolment,
         builder: (_, __) => const EnrolmentScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.enrolmentFace,
+        builder: (_, state) {
+          final tally = state.uri.queryParameters['tally'] ?? '';
+          final next = state.uri.queryParameters['next'];
+          return FaceEnrolmentScreen(tally: tally, nextScreen: next);
+        },
+      ),
+      GoRoute(
+        path: AppRoutes.enrolmentFingerprint,
+        builder: (_, state) {
+          final tally = state.uri.queryParameters['tally'] ?? '';
+          return FingerprintEnrolmentScreen(tally: tally);
+        },
       ),
       GoRoute(
         path: AppRoutes.settings,

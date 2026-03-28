@@ -266,7 +266,8 @@ class _TouchScreenState extends ConsumerState<TouchScreen>
                   onTap: () async {
                     _stopStreaming();
                     await context.push('/settings');
-                    if (mounted && ref.read(activeScanModeProvider) == ScanMode.touch) {
+                    if (mounted &&
+                        ref.read(activeScanModeProvider) == ScanMode.touch) {
                       _startStreaming();
                     }
                   },
@@ -462,9 +463,8 @@ class _BiometricCard extends StatelessWidget {
                 height: 10.0,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: isConnected
-                      ? AppColors.success
-                      : AppColors.darkDivider,
+                  color:
+                      isConnected ? AppColors.success : AppColors.darkDivider,
                 ),
               ),
             ],
@@ -476,10 +476,9 @@ class _BiometricCard extends StatelessWidget {
           AnimatedBuilder(
             animation: glowAnimation,
             builder: (context, child) {
-              final glowOpacity =
-                  readerState == FingerprintReaderState.reading
-                      ? glowAnimation.value
-                      : 0.3;
+              final glowOpacity = readerState == FingerprintReaderState.reading
+                  ? glowAnimation.value
+                  : 0.3;
 
               return Container(
                 width: 120.0,
